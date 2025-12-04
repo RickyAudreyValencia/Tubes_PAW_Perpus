@@ -19,13 +19,19 @@ class BukuController extends Controller
      * @return JsonResponse
      */
     public function index(): JsonResponse
-    {
-        // Fetch books with their categories, ordered by latest, and paginate the result (10 items per page).
-        $buku = buku::with('kategori')->latest()->paginate(10);
+{
+    $buku = buku::with('kategori')->latest()->paginate(10);
 
-        // Return the paginated data as a JSON response.
-        return response()->json($buku);
-    }
+    // Tambahkan transform untuk mengubah gambar_sampul jadi URL penuh
+  $buku->getCollection()->transform(function($item) {
+    $item->gambar_sampul = $item->gambar_sampul ? asset($item->gambar_sampul) : null;
+    return $item;
+});
+
+    return response()->json($buku);
+}
+
+
 
     /**
      * Show the form for creating a new resource (usually not needed for pure API).
@@ -49,39 +55,50 @@ class BukuController extends Controller
      * @return JsonResponse
      */
     public function store(Request $request): JsonResponse
-    {
-        try {
-            $this->validate($request, [
-                'id_kategori' => 'required|exists:kategori,id_kategori',
-                'judul' => 'required|string',
-            ]);
+{
+    try {
+        $this->validate($request, [
+            'id_kategori' => 'required|exists:kategori,id_kategori',
+            'judul' => 'required|string',
+            'gambar_sampul' => 'nullable|image|mimes:jpeg,png,jpg|max:2048', // validasi file
+        ]);
 
-            $buku = buku::create($request->only([
-                'id_kategori', 'judul', 'penulis', 'penerbit', 'tahun_terbit', 'isbn', 'deskripsi', 'gambar_sampul', 'stok'
-            ]));
+        $data = $request->only([
+            'id_kategori', 'judul', 'penulis', 'penerbit', 'tahun_terbit', 'isbn', 'deskripsi', 'stok'
+        ]);
 
-            // Return success response with the created resource and status code 201 (Created)
-            return response()->json([
-                'success' => true,
-                'message' => 'Data Berhasil Disimpan!',
-                'data' => $buku
-            ], 201);
-        } catch (\Illuminate\Validation\ValidationException $e) {
-            // Return validation errors
-            return response()->json([
-                'success' => false,
-                'message' => 'Validasi Gagal',
-                'errors' => $e->errors()
-            ], 422);
-        } catch (Exception $e) {
-            // Return general error
-            return response()->json([
-                'success' => false,
-                'message' => 'Terjadi Kesalahan Saat Menyimpan Data',
-                'error' => $e->getMessage()
-            ], 500);
-        }
+        // Jika ada file gambar
+        if ($request->hasFile('gambar_sampul')) {
+    $file = $request->file('gambar_sampul');
+    $namaFile = $file->getClientOriginalName(); // tetap nama asli
+    $file->move(public_path('uploads/buku'), $namaFile);
+    $data['gambar_sampul'] = 'uploads/buku/' . $namaFile;
+}
+
+
+        $buku = buku::create($data);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Data Berhasil Disimpan!',
+            'data' => $buku
+        ], 201);
+
+    } catch (\Illuminate\Validation\ValidationException $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Validasi Gagal',
+            'errors' => $e->errors()
+        ], 422);
+    } catch (Exception $e) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Terjadi Kesalahan Saat Menyimpan Data',
+            'error' => $e->getMessage()
+        ], 500);
     }
+}
+
 
     /**
      * Show the form for editing the specified resource (usually not needed for pure API).

@@ -103,6 +103,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('/detail-peminjaman/delete/{id}', [DetailPeminjamanController::class, 'apiDestroy']);
 
 
+    Route::put('/peminjaman/{id}/update-status-pinjam', [PeminjamanController::class, 'apiUpdateStatusToPinjam']);
     /*
     |--------------------------------------------------------------------------
     | API PETUGAS 
@@ -122,7 +123,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/peminjaman', [PeminjamanController::class, 'apiIndex']);
     Route::post('/peminjaman', [PeminjamanController::class, 'apiStore']);
     Route::post('/peminjaman/create', [PeminjamanController::class, 'apiStore']);
-    Route::post('/peminjaman/update/{id}', [PeminjamanController::class, 'apiUpdate']);
+    Route::put('/peminjaman/update/{id}', [PeminjamanController::class, 'apiUpdate']);
     Route::delete('/peminjaman/delete/{id}', [PeminjamanController::class, 'apiDestroy']);
 
     

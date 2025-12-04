@@ -20,6 +20,7 @@ class peminjaman extends Model
 		'tgl_jatuh_tempo',
 		'tgl_kembali',
 		'status',
+		'id_item_buku'
 	];
 
 	protected $casts = [
@@ -45,7 +46,7 @@ class peminjaman extends Model
 
 	public function itemBuku()
 	{
-		return $this->belongsToMany(item_buku::class, 'detail_peminjaman', 'id_peminjaman', 'id_item_buku', 'id_peminjaman', 'id_item_buku');
+		return $this->belongsTo(item_buku::class, 'id_item_buku', 'id_item_buku');
 	}
 
 	public function denda()
