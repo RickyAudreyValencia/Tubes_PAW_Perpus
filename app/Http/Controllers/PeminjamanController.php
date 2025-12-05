@@ -8,6 +8,7 @@ use App\Models\peminjaman;
 use App\Models\anggota;
 use App\Models\petugas;
 use App\Models\item_buku;
+use App\Models\buku;
 use Illuminate\Foundation\Validation\ValidatesRequests;
 
 use Illuminate\Support\Facades\DB;
@@ -36,25 +37,28 @@ class PeminjamanController extends Controller
             'id_petugas_pinjam' => 'required|exists:petugas,id_petugas',
             'tgl_pinjam' => 'required|date',
             'tgl_jatuh_tempo' => 'required|date|after_or_equal:tgl_pinjam',
-            'item_ids' => 'required|array|min:1',
-            'item_ids.*' => 'exists:item_buku,id_item_buku',
+            'id_item_buku' => 'required|exists:item_buku,id_item_buku',
         ]);
+
+        // Cari item buku
+        $item = item_buku::findOrFail($request->id_item_buku);
 
         $p = peminjaman::create([
             'id_anggota' => $request->id_anggota,
             'id_petugas_pinjam' => $request->id_petugas_pinjam,
+            'id_item_buku' => $request->id_item_buku,
             'tgl_pinjam' => $request->tgl_pinjam,
             'tgl_jatuh_tempo' => $request->tgl_jatuh_tempo,
             'status' => $request->status ?? 'pinjam',
         ]);
 
-        // attach items
-        if ($request->filled('item_ids')) {
-            foreach ($request->item_ids as $itemId) {
-                $p->itemBuku()->attach($itemId);
-                // mark item as not available
-                $ib = item_buku::find($itemId);
-                if ($ib) { $ib->update(['status' => 'dipinjam']); }
+        // mark item as not available dan kurangi stok
+        if ($item) { 
+            $item->update(['status' => 'dipinjam']);
+            // Kurangi stok buku
+            $bukuModel = buku::find($item->id_buku);
+            if ($bukuModel) {
+                $bukuModel->decrement('stok');
             }
         }
 
@@ -119,13 +123,16 @@ class PeminjamanController extends Controller
             'id_buku' => 'required|exists:buku,id_buku'
         ]);
 
-        // Cari item buku yang tersedia
-        $item = item_buku::where('id_buku', $request->id_buku)
-    ->whereDoesntHave('peminjaman', function ($q) {
-        $q->whereNull('tgl_kembali');
-    })
-    ->first();
+        // Cek stok di tabel buku
+        $bukuModel = buku::findOrFail($request->id_buku);
+        if (!$bukuModel || $bukuModel->stok <= 0) {
+            return response()->json(['message' => 'Tidak ada stok item buku tersedia'], 400);
+        }
 
+        // Cari item buku yang tersedia (status = 'tersedia')
+        $item = item_buku::where('id_buku', $request->id_buku)
+            ->where('status', 'tersedia')
+            ->first();
 
         if (!$item) {
             return response()->json(['message' => 'Tidak ada stok item buku tersedia'], 400);
@@ -143,12 +150,12 @@ class PeminjamanController extends Controller
             'id_petugas_pinjam' => $petugas->id_petugas,
             'id_item_buku' => $item->id_item_buku,   // <-- SIMPAN DI SINI!
             'tgl_pinjam' => $request->tanggal_pinjam,
-            'tgl_jatuh_tempo' => $request->tanggal_kembali,
+            'tgl_jatuh_tempo' => $request->tanggal_pinjam,
             'status' => 'pending',
         ]);
 
-        // Update status item buku
-        $item->update(['status' => 'dipinjam']);
+        // Update status item buku ke pending (belum dipinjam, tunggu disetujui)
+        $item->update(['status' => 'pending']);
 
         return response()->json([
             'message' => 'Peminjaman berhasil dibuat',
@@ -169,18 +176,32 @@ class PeminjamanController extends Controller
             ], 404);
         }
         
+        // Hanya allow cancel jika status masih 'pending'
+        if ($peminjaman->status !== 'pending') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Peminjaman dengan status ' . $peminjaman->status . ' tidak bisa dibatalkan. Hanya peminjaman pending yang bisa dibatalkan.',
+            ], 400);
+        }
+        
+        // Kembalikan status item ke tersedia (tidak perlu tambah stok karena belum dikurangi)
+        if ($peminjaman->itemBuku) {
+            $itemBuku = $peminjaman->itemBuku;
+            $itemBuku->update(['status' => 'tersedia']);
+        }
+        
         $peminjaman->delete();
 
         return response()->json([
             'success' => true,
-            'message' => 'Peminjaman berhasil dihapus',
+            'message' => 'Peminjaman berhasil dibatalkan',
         ]);
     }
 
     public function apiUpdateStatusToPinjam($id)
     {
         try {
-            // Cari peminjaman
+            // Cari peminjaman dengan item buku
             $peminjaman = peminjaman::where('id_peminjaman', $id)
                 ->with(['anggota', 'itemBuku'])
                 ->first();
@@ -199,27 +220,84 @@ class PeminjamanController extends Controller
                 ], 400);
             }
             
-            // Update status peminjaman
+            // Update status peminjaman menjadi pinjam
             $peminjaman->update([
                 'status' => 'pinjam',
                 'tgl_pinjam' => now(),
             ]);
             
-            // Update item buku TANPA FOREACH - menggunakan update massal
-            // Ambil semua id_item_buku dari relasi
-            $itemIds = $peminjaman->itemBuku->pluck('id_item_buku')->toArray();
-            
-            // Update massal
-            if (!empty($itemIds)) {
-                item_buku::whereIn('id_item_buku', $itemIds)
-                    ->update(['status' => 'dipinjam']);
+            // Update hanya item yang terkait peminjaman ini
+            $itemBuku = $peminjaman->itemBuku;
+            if ($itemBuku) {
+                if ($itemBuku->status !== 'dipinjam') {
+                    $itemBuku->update(['status' => 'dipinjam']);
+                    
+                    // Kurangi stok buku HANYA saat status berubah dari pending ke dipinjam
+                    $bukuModel = buku::find($itemBuku->id_buku);
+                    if ($bukuModel) {
+                        $bukuModel->decrement('stok');
+                    }
+                }
             }
             
             return response()->json([
                 'success' => true,
                 'message' => 'Status peminjaman berhasil diubah menjadi pinjam',
-                'data' => $peminjaman->fresh(['anggota', 'itemBuku']),
-                'updated_items' => count($itemIds)
+                'data' => $peminjaman->fresh(['anggota', 'itemBuku'])
+            ]);
+            
+        } catch (Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Terjadi kesalahan: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function apiReturn($id)
+    {
+        try {
+            // Cari peminjaman yang sudah dipinjam
+            $peminjaman = peminjaman::where('id_peminjaman', $id)
+                ->with(['anggota', 'itemBuku'])
+                ->first();
+            
+            if (!$peminjaman) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Peminjaman tidak ditemukan'
+                ], 404);
+            }
+            
+            if ($peminjaman->status !== 'pinjam') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Hanya peminjaman dengan status pinjam yang bisa dikembalikan'
+                ], 400);
+            }
+            
+            // Update status peminjaman menjadi kembali
+            $peminjaman->update([
+                'status' => 'kembali',
+                'tgl_kembali' => now(),
+            ]);
+            
+            // Kembalikan item dan tambah stok
+            $itemBuku = $peminjaman->itemBuku;
+            if ($itemBuku) {
+                $itemBuku->update(['status' => 'tersedia']);
+                
+                // Tambah stok buku
+                $bukuModel = buku::find($itemBuku->id_buku);
+                if ($bukuModel) {
+                    $bukuModel->increment('stok');
+                }
+            }
+            
+            return response()->json([
+                'success' => true,
+                'message' => 'Buku berhasil dikembalikan',
+                'data' => $peminjaman->fresh(['anggota', 'itemBuku'])
             ]);
             
         } catch (Exception $e) {

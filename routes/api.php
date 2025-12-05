@@ -104,6 +104,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
     Route::put('/peminjaman/{id}/update-status-pinjam', [PeminjamanController::class, 'apiUpdateStatusToPinjam']);
+    Route::put('/peminjaman/{id}/return', [PeminjamanController::class, 'apiReturn']);
     /*
     |--------------------------------------------------------------------------
     | API PETUGAS 
